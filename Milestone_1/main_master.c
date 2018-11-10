@@ -1,3 +1,5 @@
+// Used to test Bluetooth Master, Motor Drivers, ADMUX inputs for IR Transceivers, and Nokia 5110 screen output
+
 #include <avr/io.h>
 #include "timer.h"
 #include "glcd.h"
