@@ -1,9 +1,4 @@
-/*	Partner(s) Name & E-mail: Tyler Woods, twood010@ucr.edu
- *	Lab Section: 022
- *	Assignment: Lab #2  Exercise #1
- *	I acknowledge all content contained herein, excluding template or example
- *	code, is my own original work.
- */
+//Test Bluetooth Slave 
 
 
 #include <avr/io.h>
