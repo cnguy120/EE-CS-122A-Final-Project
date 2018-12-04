@@ -1,0 +1,259 @@
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <string.h>
+#include <math.h>
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <avr/eeprom.h>
+#include <avr/portpins.h>
+#include <avr/pgmspace.h>
+
+//Usart include files
+#include "usart_ATmega1284.h"
+
+//ADC include files
+#include "adc.h"
+
+//FreeRTOS include files
+#include "FreeRTOS.h"
+#include "task.h"
+#include "croutine.h"
+
+void delay_ms(int miliSec) {//for 8 Mhz crystal
+	int i,j;
+	for(i=0;i<miliSec;i++)
+	for(j=0;j<775;j++)
+	{
+		asm("nop");
+	}
+	
+}
+
+enum driveStates {dinit, high, low}dstate;
+enum irStates {iinit, poll} istate;
+enum brainStates {binit, okay, collision, turnright, turnleft}bstate;
+enum startStates {sinit, usart}sstate;
+
+unsigned short threshold;
+unsigned char driveflag = 0;
+#define dutycycle 5 // out of 10
+
+#define ir_f 0
+#define ir_r 1
+#define ir_l 2
+#define radius 5 // count for 90 degree turn
+
+unsigned short ir_fval = 0;
+unsigned short ir_rval = 0;
+unsigned short ir_lval = 0;
+unsigned char crash = 0;
+
+void driveTick() {
+	if (crash == true | driveflag == false) {
+		PORTC = 0;
+		} else {
+		PORTC = 0x05;
+	}
+	
+}
+
+void irTick() {
+	switch (istate) {
+		case iinit:
+		setADC(ir_f);
+		threshold = ADC + 50;
+		istate = poll;
+		break;
+		case poll:
+		setADC(ir_f);
+		delay_ms(1);
+		ir_fval = ADC;
+		
+		setADC(ir_r);
+		delay_ms(1);
+		ir_rval = ADC;
+		
+		setADC(ir_l);
+		delay_ms(1);
+		ir_lval = ADC;
+		break;
+		default:
+		istate = poll;
+		break;
+	}
+}
+
+void brainTick() {
+	switch (bstate) {
+		case binit:
+		driveflag = true; //remove when usart
+		bstate = okay;
+		break;
+		case okay:
+		if (ir_fval > threshold) {			//ir value increases as objects get closer
+			bstate = collision;
+			} else {
+			bstate = okay;
+		}
+		break;
+		case collision:
+		if (ir_fval > threshold) {			//ir value increases as objects get closer
+			if (ir_rval < threshold && ir_lval < threshold) {
+				bstate = turnright;
+				delay_ms(2000);
+				} else if (ir_rval > threshold && ir_lval < threshold) {
+				bstate = turnleft;
+				delay_ms(2000);
+				} else if (ir_rval < threshold && ir_lval > threshold) {
+				bstate = turnright;
+				delay_ms(2000);
+				} else {
+				bstate = collision;
+			}
+			} else {
+			bstate = okay;
+		}
+		break;
+		case turnright:
+		bstate = collision;
+		break;
+		case turnleft:
+		bstate = collision;
+		break;
+		default:
+		bstate = binit;
+		break;
+	}
+	switch (bstate) {
+		case binit:
+		crash = true;
+		break;
+		case okay:
+		crash = false;
+		break;
+		case collision:
+		crash = true;
+		break;
+		case turnright:
+		crash = true;
+		for(char i =0; i < radius; ++i) {
+			PORTC = 0x04;		//left wheel turn
+			delay_ms(1000);
+		}
+		break;
+		case turnleft:
+		crash = true;
+		for(char i =0; i < radius; ++i) {
+			PORTC = 0x01;		//left wheel turn
+			delay_ms(1000);
+		}
+		break;
+		
+	}
+
+}
+
+void startTick() {
+	switch(sstate) {
+		case sinit:
+		if (USART_HasReceived(0)) {
+			unsigned char temp = USART_Receive(0);
+			if(temp == 2) {
+				driveflag = true;
+				} else {
+				driveflag = false;
+			}
+		}
+		break;
+	}
+	
+}
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+void driveTask()
+{
+	dstate = 0;
+	for(;;)
+	{
+		driveTick();
+		vTaskDelay(50);
+	}
+}
+
+void irTask()
+{
+	istate = 0;
+	for(;;)
+	{
+		irTick();
+		vTaskDelay(25);
+	}
+}
+
+void brainTask() {
+	bstate = 0;
+	for(;;)
+	{
+		PORTB = bstate;
+		brainTick();
+		vTaskDelay(50);
+	}
+}
+
+void startTask() {
+	sstate = 0;
+	for(;;)
+	{
+		startTick();
+		vTaskDelay(50);
+	}
+}
+
+void drivePulse(unsigned portBASE_TYPE Priority)
+{
+	xTaskCreate(driveTask, (signed portCHAR *)"driveTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL );
+
+}
+
+void irPulse(unsigned portBASE_TYPE Priority)
+{
+	xTaskCreate(irTask, (signed portCHAR *)"irTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL );
+
+}
+
+void brainPulse(unsigned portBASE_TYPE Priority)
+{
+	xTaskCreate(brainTask, (signed portCHAR *)"brainTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL );
+
+}
+
+void startPulse(unsigned portBASE_TYPE Priority)
+{
+	xTaskCreate(startTask, (signed portCHAR *)"startTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL );
+
+}
+
+int main()
+{
+	DDRA = 0x00; PORTA = 0xFF;
+	DDRB = 0xFF; PORTB = 0x00;
+	DDRC = 0xFF; PORTC = 0x00;
+	DDRD = 0x02; PORTD = 0xFD;
+	
+	ADC_init();
+	initUSART(0);
+	
+	/* Replace with your application code */
+	//Start Tasks
+	drivePulse(0);
+	irPulse(2);
+	brainPulse(1);
+	//RunScheduler
+	
+	vTaskStartScheduler();
+	
+	return 0;
+}
+
